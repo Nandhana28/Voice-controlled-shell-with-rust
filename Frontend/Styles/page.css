@@ -1,0 +1,176 @@
+/* Navbar */
+.navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 60px;
+    width: 100%;
+    background: #003366;
+    color: white;
+    text-align: center;
+    padding: 15px 0;
+    font-size: 1.5rem;
+    font-weight: bold;
+    z-index: 1000;
+  }
+  .navbar h1 {
+    margin: 0;
+  }
+  
+  /* Main container (below navbar) */
+  .main-container {
+    margin-top: 50px; /* Space for navbar */
+    display: flex;
+    height: calc(100vh - 60px);
+  }
+  
+  /* Page content: Two-column layout */
+  .content-container {
+    display: flex;
+    width: 100%;
+    height: 100%;
+  }
+  
+  /* Left Section: Commands */
+  .left-section {
+    flex: 1;
+    padding: 20px;
+    background: #cce5ff;
+    overflow-y: auto;
+  }
+  
+  .voice-button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  
+  .voice-button:hover {
+    background-color: #0056b3;
+  }
+  
+  /* Right Section: Output */
+  .right-section {
+    flex: 1;
+    padding: 20px;
+    background: #fff;
+    border-left: 2px solid #444;
+    overflow-y: auto;
+    position: relative;
+  }
+  
+  /* Fixing the Outputs heading inside the output box */
+  /* Output box styling */
+  .scrollable-output {
+    padding: 10px;
+    border: 1px solid #444;
+    min-height: 400px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    font-family: monospace;
+    white-space: pre-wrap;
+    background: white;
+  }
+  
+  /* Fix Output heading */
+  .section-header {
+    background-color: white; /* Ensures Commands section is not grey */
+    color: black;
+    font-weight: bold;
+    padding: 10px;
+    text-align: center;
+    border-bottom: 2px solid black;
+  }
+  
+  .right-section .section-header {
+    background-color: lightgray; /* Grey background only for Outputs */
+  }
+  
+  /* Output List */
+  .output-list {
+    list-style-type: none;
+    padding-left: 10px;
+  }
+  
+  .output-line {
+    margin: 5px 0;
+  }
+  
+  
+  /* Grid layout for buttons (3 per row) */
+  .command-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  
+  /* Buttons */
+  .command-button {
+    border-radius: 2px;
+    padding: 10px;
+    font-size: 1rem;
+    border: none;
+    background: #007bff;
+    color: white;
+    cursor: pointer;
+    text-transform: capitalize;
+  }
+  
+  .command-button:hover {
+    background: #0056b3;
+  }
+  
+  /* Dropdown Buttons */
+  .dropdown {
+    margin-top: 10px;
+  }
+  
+  .dropdown-button {
+    width: 100%;
+    padding: 10px;
+    font-size: 1rem;
+    border: none;
+    background: #007bff;
+    color: white;
+    cursor: pointer;
+    text-transform: capitalize;
+  }
+  
+  .dropdown-button:hover {
+    background: #0056b3;
+  }
+  
+  .danger {
+    background: #ff4444;
+  }
+  
+  .danger:hover {
+    background: #cc0000;
+  }
+  
+  /* Dropdown Content */
+  .dropdown-content {
+    display: flex;
+    flex-direction: column;
+    background: white;
+    border: 1px solid #ddd;
+    padding: 5px;
+  }
+  
+  .dropdown-item {
+    padding: 8px;
+    font-size: 1rem;
+    border: none;
+    background: #f8f9fa;
+    color: black;
+    cursor: pointer;
+    text-align: left;
+  }
+  
+  .dropdown-item:hover {
+    background: #e2e6ea;
+  }
+  

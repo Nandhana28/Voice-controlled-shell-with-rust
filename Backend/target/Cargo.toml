@@ -1,0 +1,29 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1.40.0", features = ["full"] }
+tower-http = { version = "0.5.2", features = ["cors"] }
+axum-server = "0.7.0"
+sysinfo = "0.28"
+chrono = "0.4.40"
+dirs = "6.0.0"
+anyhow = "1.0.97"
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+whoami = "1.6.0"
+image = "0.25.6"
+scrap = "0.5.0"
+walkdir = "2.3.3"
+hyper = "1.6.0"
+reqwest = { version = "0.12", features = ["blocking"] }
+tower = "0.5.2"
+rfd = "0.15.3"
+
+
+[[bin]]
+name = "backend"
+path = "src/api.rs"

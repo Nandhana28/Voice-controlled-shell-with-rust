@@ -33,8 +33,12 @@ cd Backend
 cargo run
  ```
 #▶️ 2. Start the React Frontend
+- If package.json is not present, initialize it by running npm init.
+- Install dependencies using npm install.
  ```bash
 cd Frontend
-npm install
+npm init
+npm install react react-dom
+npm install react-speech-recognition
 npm start
 ```

@@ -13,20 +13,28 @@ A full-stack voice-controlled app using **Rust (Axum)** for the backend and **Re
   ```bash
   node -v
   npm -v
+  ```
 
 ### 🔸 Install Rust (for backend)
 - Install via terminal:
+   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
 - After installation, restart terminal and verify:
+   ```bash
   rustc --version
   cargo --version
+   ```
 
 ## Run the project
-▶️ 1. Start the Rust Backend
+#▶️ 1. Start the Rust Backend
+ ```bash
 cd Backend
 cargo run
-
-▶️ 2. Start the React Frontend
+ ```
+#▶️ 2. Start the React Frontend
+ ```bash
 cd Frontend
 npm install
 npm start
+```

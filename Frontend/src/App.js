@@ -13,6 +13,8 @@ const AuroraAssistant = () => {
   const [showMemoryDropdown, setShowMemoryDropdown] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  const [behaviorLogs, setBehaviorLogs] = useState([]);
+  const [showBehaviorLogs, setShowBehaviorLogs] = useState(false);
 
   // List of commands that require arguments
   const commandsWithArgs = [
@@ -91,6 +93,17 @@ const AuroraAssistant = () => {
         ))}
       </ul>
     );
+  };
+
+  const fetchBehaviorLogs = async () => {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/logs");
+      const logs = await response.json();
+      setBehaviorLogs(logs);
+      setShowBehaviorLogs(true);
+    } catch (error) {
+      setOutput(`Error fetching logs: ${error.message}`);
+    }
   };
 
   const startListening = () => {
@@ -403,7 +416,7 @@ const AuroraAssistant = () => {
 
             <div className="dropdown">
               <button
-                className="dropdown-button danger"
+                className="dropdown-button"
                 onClick={() => setShowDangerDropdown(!showDangerDropdown)}
               >
                 Danger Commands ⚠ ▼
@@ -424,14 +437,42 @@ const AuroraAssistant = () => {
                 </div>
               )}
             </div>
+
+            <button className="command-button" onClick={fetchBehaviorLogs} style={{ marginTop: "20px", backgroundColor: "#00CCFF" }}>
+              📊 View Behavior Logs
+            </button>
           </div>
         </div>
 
         <div className="right-section">
           <h2 className="section-header">Outputs</h2>
-          <div className="scrollable-output">
-            {loading ? "Loading..." : output || "Click a button to get output."}
-          </div>
+          {showBehaviorLogs ? (
+            <div className="scrollable-output">
+              <h3>Behavior Logs ({behaviorLogs.length})</h3>
+              {behaviorLogs.length === 0 ? (
+                <p>No logs yet</p>
+              ) : (
+                <div style={{ fontSize: "12px", maxHeight: "600px", overflowY: "auto" }}>
+                  {behaviorLogs.map((log, idx) => (
+                    <div key={idx} style={{ marginBottom: "15px", padding: "10px", backgroundColor: "#1a1a1a", borderRadius: "5px", borderLeft: "3px solid #00FF00" }}>
+                      <p><strong>Command:</strong> {log.command}</p>
+                      <p><strong>Input:</strong> {log.input}</p>
+                      <p><strong>Status:</strong> {log.status}</p>
+                      <p><strong>Duration:</strong> {log.duration_ms}ms</p>
+                      <p><strong>Timestamp:</strong> {log.timestamp}</p>
+                      <p><strong>CPU Before:</strong> {log.state_before.cpu_usage.toFixed(2)}% → <strong>After:</strong> {log.state_after.cpu_usage.toFixed(2)}%</p>
+                      <p><strong>Memory Before:</strong> {(log.state_before.used_memory / 1024 / 1024).toFixed(2)}MB → <strong>After:</strong> {(log.state_after.used_memory / 1024 / 1024).toFixed(2)}MB</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => setShowBehaviorLogs(false)} style={{ marginTop: "10px" }}>Back to Output</button>
+            </div>
+          ) : (
+            <div className="scrollable-output">
+              {loading ? "Loading..." : output || "Click a button to get output."}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -439,3 +480,6 @@ const AuroraAssistant = () => {
 };
 
 export default AuroraAssistant;
+
+// Also export as App for compatibility
+export { AuroraAssistant as App };

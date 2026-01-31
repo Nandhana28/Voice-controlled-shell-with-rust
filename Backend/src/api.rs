@@ -14,6 +14,8 @@ use dirs::home_dir;
 use anyhow::{Result, Context};
 use sysinfo::{System, SystemExt, ProcessExt, DiskExt, CpuExt};
 use std::process::Command;
+use std::sync::Mutex;
+use lazy_static::lazy_static;
 
 #[derive(Debug, Deserialize)]
 struct CommandRequest {
@@ -30,10 +32,113 @@ struct CommandOutput {
     response: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SystemState {
+    timestamp: String,
+    total_memory: u64,
+    used_memory: u64,
+    free_memory: u64,
+    cpu_usage: f32,
+    disk_free: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BehaviorLog {
+    timestamp: String,
+    command: String,
+    input: String,
+    output: String,
+    status: String,
+    duration_ms: u128,
+    state_before: SystemState,
+    state_after: SystemState,
+}
+
+lazy_static! {
+    static ref BEHAVIOR_LOGS: Mutex<Vec<BehaviorLog>> = Mutex::new(Vec::new());
+}
+
+fn capture_system_state() -> SystemState {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    
+    let total_memory = sys.total_memory();
+    let used_memory = sys.used_memory();
+    let free_memory = sys.free_memory();
+    let mut cpu_usage = 0.0;
+    
+    for cpu in sys.cpus() {
+        cpu_usage += cpu.cpu_usage();
+    }
+    cpu_usage /= sys.cpus().len().max(1) as f32;
+    
+    let disk_free = sys.disks().iter().map(|d| d.available_space()).sum();
+    
+    SystemState {
+        timestamp: Local::now().to_rfc3339(),
+        total_memory,
+        used_memory,
+        free_memory,
+        cpu_usage,
+        disk_free,
+    }
+}
+
+fn validate_system_state(state: &SystemState) -> Result<()> {
+    if state.cpu_usage < 0.0 || state.cpu_usage > 100.0 {
+        return Err(anyhow::anyhow!("Invalid CPU usage: {}", state.cpu_usage));
+    }
+    
+    if state.total_memory == 0 {
+        return Err(anyhow::anyhow!("Invalid total memory"));
+    }
+    
+    if state.used_memory > state.total_memory {
+        return Err(anyhow::anyhow!("Used memory exceeds total memory"));
+    }
+    
+    if state.free_memory > state.total_memory {
+        return Err(anyhow::anyhow!("Free memory exceeds total memory"));
+    }
+    
+    Ok(())
+}
+
+fn validate_output_format(output: &str, expected_keywords: &[&str]) -> bool {
+    if output.is_empty() {
+        return false;
+    }
+    expected_keywords.iter().any(|keyword| output.contains(keyword))
+}
+
+fn log_behavior(command: &str, input: &str, output: &str, status: &str, duration_ms: u128, state_before: SystemState, state_after: SystemState) {
+    let log_entry = BehaviorLog {
+        timestamp: Local::now().to_rfc3339(),
+        command: command.to_string(),
+        input: input.to_string(),
+        output: output.to_string(),
+        status: status.to_string(),
+        duration_ms,
+        state_before,
+        state_after,
+    };
+    
+    if let Ok(mut logs) = BEHAVIOR_LOGS.lock() {
+        logs.push(log_entry);
+    }
+}
+
+fn get_behavior_logs() -> Vec<BehaviorLog> {
+    BEHAVIOR_LOGS.lock().ok().map(|logs| logs.clone()).unwrap_or_default()
+}
+
 async fn handle_command_request(
     State(commands): State<Arc<HashMap<String, Box<dyn Fn(&str) -> String + Send + Sync>>>>,
     Json(payload): Json<CommandRequest>,
 ) -> Json<CommandResponse> {
+    let start_time = std::time::Instant::now();
+    let state_before = capture_system_state();
+    
     let parts: Vec<&str> = payload.command.split_whitespace().collect();
     let command = parts[0];
     let argument = parts.get(1..).map(|args| args.join(" ")).unwrap_or_default();
@@ -41,7 +146,16 @@ async fn handle_command_request(
     let response = commands
         .get(command)
         .map(|func| func(&argument))
-        .unwrap_or_else(|| "Sorry, I didn’t get you.".to_string());
+        .unwrap_or_else(|| "Sorry, I didn't get you.".to_string());
+
+    let state_after = capture_system_state();
+    let duration_ms = start_time.elapsed().as_millis();
+    let status = if response.contains("Error") { "FAILED" } else { "SUCCESS" };
+    
+    let _ = validate_system_state(&state_before);
+    let _ = validate_system_state(&state_after);
+    
+    log_behavior(command, &argument, &response, status, duration_ms, state_before, state_after);
 
     Json(CommandResponse { response })
 }
@@ -68,7 +182,6 @@ fn speak_to_speaker(text: &str) -> Result<()> {
     Ok(())
 }
 
-// Command functions
 fn hello(_arg: &str) -> String {
     if let Err(e) = speak_to_speaker("Hello!") {
         return format!("Error: {}", e);
@@ -435,9 +548,9 @@ fn help(_arg: &str) -> String {
 }
 
 fn clean_filename(arg: &str) -> String {
-    let arg = arg.replace("dot", "."); // Replace "dot" with "."
-    let arg = arg.split_whitespace().collect::<Vec<_>>().join(" "); // Remove extra spaces
-    arg.replace(" .", ".").replace(". ", ".").trim().to_string() // Fix spaces around dots
+    let arg = arg.replace("dot", ".");
+    let arg = arg.split_whitespace().collect::<Vec<_>>().join(" ");
+    arg.replace(" .", ".").replace(". ", ".").trim().to_string()
 }
 
 fn open_file(arg: &str) -> String {
@@ -464,22 +577,20 @@ fn open_file(arg: &str) -> String {
     }
 }
 
-
-
 fn create_file(arg: &str) -> String {
-    println!("{}",arg);
     let cleaned_arg = clean_filename(arg);
-    println!("Creating file: {}", cleaned_arg);
     if cleaned_arg.is_empty() {
         return "Error: Please provide a valid file name.".to_string();
     }
 
     match fs::File::create(&cleaned_arg) {
-        Ok(_) => format!("File '{}' created successfully.", cleaned_arg),
+        Ok(_) => {
+            assert!(Path::new(&cleaned_arg).exists(), "File not created");
+            format!("File '{}' created successfully.", cleaned_arg)
+        },
         Err(e) => format!("Failed to create file '{}': {}", cleaned_arg, e),
     }
 }
-
 
 fn delete_file(arg: &str) -> String {
     let cleaned_arg = clean_filename(arg);
@@ -489,7 +600,10 @@ fn delete_file(arg: &str) -> String {
     }
 
     match fs::remove_file(&cleaned_arg) {
-        Ok(_) => format!("File '{}' deleted successfully.", cleaned_arg),
+        Ok(_) => {
+            assert!(!Path::new(&cleaned_arg).exists(), "File still exists after deletion");
+            format!("File '{}' deleted successfully.", cleaned_arg)
+        },
         Err(e) => format!("Failed to delete file '{}': {}", cleaned_arg, e),
     }
 }
@@ -508,7 +622,11 @@ fn move_file_or_folder(args: &str) -> String {
     }
 
     match fs::rename(&source, &destination) {
-        Ok(_) => format!("Moved '{}' to '{}'.", source, destination),
+        Ok(_) => {
+            assert!(Path::new(&destination).exists(), "Destination not found after move");
+            assert!(!Path::new(&source).exists(), "Source still exists after move");
+            format!("Moved '{}' to '{}'.", source, destination)
+        },
         Err(e) => format!("Failed to move '{}': {}", source, e),
     }
 }
@@ -523,10 +641,15 @@ fn rename_file_or_folder(args: &str) -> String {
     let new_name = clean_filename(parts[1]);
 
     match fs::rename(&old_name, &new_name) {
-        Ok(_) => format!("Renamed: {} -> {}", old_name, new_name),
+        Ok(_) => {
+            assert!(Path::new(&new_name).exists(), "New file not found after rename");
+            assert!(!Path::new(&old_name).exists(), "Old file still exists after rename");
+            format!("Renamed: {} -> {}", old_name, new_name)
+        },
         Err(e) => format!("Failed to rename: {}", e),
     }
 }
+
 fn search_file_or_folder(arg: &str) -> String {
     let cleaned_arg = clean_filename(arg);
     
@@ -682,7 +805,7 @@ fn compile_code(arg: &str) -> String {
         return "Error: Please provide a file name to compile.".to_string();
     }
 
-    let output_name = filename.trim_end_matches(".c").trim_end_matches(".cpp"); // Get name without extension
+    let output_name = filename.trim_end_matches(".c").trim_end_matches(".cpp");
 
     let output = if filename.ends_with(".rs") {
         Command::new("rustc").arg(&filename).output()
@@ -708,8 +831,6 @@ fn compile_code(arg: &str) -> String {
     }
 }
 
-
-
 fn print_file_content(arg: &str) -> String {
     let filename = clean_filename(arg);
     if filename.is_empty() {
@@ -734,14 +855,12 @@ fn print_file_content(arg: &str) -> String {
 
 fn run_code(arg: &str) -> String {
     let cleaned_arg = clean_filename(arg);
-    let executable = cleaned_arg.trim_end_matches(".c").trim_end_matches(".cpp"); // Match compiled output
-
-    println!("Attempting to run: {}", executable);
+    let executable = cleaned_arg.trim_end_matches(".c").trim_end_matches(".cpp");
 
     let output = if cleaned_arg.ends_with(".py") {
         Command::new("python3").arg(&cleaned_arg).output()
     } else {
-        Command::new(format!("./{}", executable)).output() // Run compiled binary
+        Command::new(format!("./{}", executable)).output()
     };
 
     match output {
@@ -755,8 +874,6 @@ fn run_code(arg: &str) -> String {
         Err(e) => format!("Error running the program: {}", e),
     }
 }
-
-
 
 fn create_symlink(arg: &str) -> String {
     let args: Vec<&str> = arg.split_whitespace().collect();
@@ -786,7 +903,7 @@ fn create_symlink(arg: &str) -> String {
 }
 
 fn navigate_directories(_arg: &str) -> String {
-    "Error: Interactive navigation not supported via API yet.".to_string() // Placeholder
+    "Error: Interactive navigation not supported via API yet.".to_string()
 }
 
 fn get_uptime(_arg: &str) -> String {
@@ -825,11 +942,9 @@ fn exit(_arg: &str) -> String {
     if let Err(e) = speak_to_speaker("Goodbye!") {
         return format!("Error: {}", e);
     }
-    println!("Goodbye!"); // Display message in terminal
-
-    // Send a shutdown signal before terminating
+    println!("Goodbye!");
     std::thread::sleep(std::time::Duration::from_secs(1));
-    process::exit(0); // Terminate backend
+    process::exit(0);
 }
 
 #[tokio::main]
@@ -890,6 +1005,7 @@ async fn main() {
     let app = Router::new()
         .route("/backend", get(|| async { "Hello from Rust backend!" }))
         .route("/command", post(handle_command_request))
+        .route("/logs", get(|| async { Json(get_behavior_logs()) }))
         .layer(cors)
         .with_state(Arc::new(commands));
 
@@ -898,4 +1014,258 @@ async fn main() {
 
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app.into_make_service()).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_system_state_valid() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 4000,
+            free_memory: 4000,
+            cpu_usage: 50.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_ok());
+    }
+
+    #[test]
+    fn test_validate_system_state_invalid_cpu() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 4000,
+            free_memory: 4000,
+            cpu_usage: 150.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_err());
+    }
+
+    #[test]
+    fn test_validate_system_state_memory_exceeds() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 9000,
+            free_memory: 4000,
+            cpu_usage: 50.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_err());
+    }
+
+    #[test]
+    fn test_validate_output_format_valid() {
+        let output = "Memory: Total: 8000 MB, Used: 4000 MB, Free: 4000 MB";
+        assert!(validate_output_format(output, &["Memory", "MB"]));
+    }
+
+    #[test]
+    fn test_validate_output_format_invalid() {
+        let output = "Some random output";
+        assert!(!validate_output_format(output, &["Memory", "MB"]));
+    }
+
+    #[test]
+    fn test_validate_output_format_empty() {
+        let output = "";
+        assert!(!validate_output_format(output, &["Memory"]));
+    }
+
+    #[test]
+    fn test_clean_filename_with_dot() {
+        let result = clean_filename("test dot txt");
+        assert_eq!(result, "test.txt");
+    }
+
+    #[test]
+    fn test_clean_filename_multiple_spaces() {
+        let result = clean_filename("test   file   name");
+        assert_eq!(result, "test file name");
+    }
+
+    #[test]
+    fn test_clean_filename_empty() {
+        let result = clean_filename("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_create_file_success() {
+        let filename = "test_file_12345.txt";
+        let result = create_file(filename);
+        assert!(result.contains("created successfully"));
+        assert!(Path::new(filename).exists());
+        let _ = fs::remove_file(filename);
+    }
+
+    #[test]
+    fn test_create_file_empty_name() {
+        let result = create_file("");
+        assert!(result.contains("Error"));
+    }
+
+    #[test]
+    fn test_delete_file_success() {
+        let filename = "test_delete_12345.txt";
+        let _ = fs::File::create(filename);
+        let result = delete_file(filename);
+        assert!(result.contains("deleted successfully"));
+        assert!(!Path::new(filename).exists());
+    }
+
+    #[test]
+    fn test_delete_file_not_exists() {
+        let result = delete_file("nonexistent_file_12345.txt");
+        assert!(result.contains("Failed"));
+    }
+
+    #[test]
+    fn test_move_file_success() {
+        let source = "source_file_12345.txt";
+        let dest = "dest_file_12345.txt";
+        let _ = fs::File::create(source);
+        let result = move_file_or_folder(&format!("{} {}", source, dest));
+        assert!(result.contains("Moved"));
+        assert!(Path::new(dest).exists());
+        let _ = fs::remove_file(dest);
+    }
+
+    #[test]
+    fn test_move_file_source_not_exists() {
+        let result = move_file_or_folder("nonexistent_12345.txt dest.txt");
+        assert!(result.contains("Error"));
+    }
+
+    #[test]
+    fn test_rename_file_success() {
+        let old_name = "old_name_12345.txt";
+        let new_name = "new_name_12345.txt";
+        let _ = fs::File::create(old_name);
+        let result = rename_file_or_folder(&format!("{} {}", old_name, new_name));
+        assert!(result.contains("Renamed"));
+        assert!(Path::new(new_name).exists());
+        let _ = fs::remove_file(new_name);
+    }
+
+    #[test]
+    fn test_capture_system_state() {
+        let state = capture_system_state();
+        assert!(state.total_memory > 0);
+        assert!(state.cpu_usage >= 0.0 && state.cpu_usage <= 100.0);
+        assert!(!state.timestamp.is_empty());
+    }
+
+    #[test]
+    fn test_log_behavior() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 4000,
+            free_memory: 4000,
+            cpu_usage: 50.0,
+            disk_free: 100000,
+        };
+        
+        log_behavior("test_cmd", "test_input", "test_output", "SUCCESS", 100, state.clone(), state);
+        let logs = get_behavior_logs();
+        assert!(!logs.is_empty());
+        assert_eq!(logs.last().unwrap().command, "test_cmd");
+        assert_eq!(logs.last().unwrap().status, "SUCCESS");
+    }
+
+    #[test]
+    fn test_hello_command() {
+        let result = hello("");
+        assert_eq!(result, "Hello!");
+    }
+
+    #[test]
+    fn test_current_day_format() {
+        let result = current_day("");
+        assert!(!result.is_empty());
+        let valid_days = vec!["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+        assert!(valid_days.iter().any(|day| result.contains(day)));
+    }
+
+    #[test]
+    fn test_current_time_format() {
+        let result = current_time("");
+        assert!(result.contains(":"));
+    }
+
+    #[test]
+    fn test_memory_usage_format() {
+        let result = memory_usage("");
+        assert!(validate_output_format(&result, &["Memory", "MB"]));
+    }
+
+    #[test]
+    fn test_cpu_usage_format() {
+        let result = cpu_usage("");
+        assert!(validate_output_format(&result, &["CPU", "%"]));
+    }
+
+    #[test]
+    fn test_disk_usage_format() {
+        let result = disk_usage("");
+        assert!(validate_output_format(&result, &["Disk", "GB"]));
+    }
+
+    #[test]
+    fn test_edge_case_very_long_filename() {
+        let long_name = "a".repeat(200);
+        let result = clean_filename(&long_name);
+        assert_eq!(result.len(), 200);
+    }
+
+    #[test]
+    fn test_edge_case_special_characters() {
+        let result = clean_filename("test@#$%file");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_boundary_zero_memory() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 0,
+            used_memory: 0,
+            free_memory: 0,
+            cpu_usage: 50.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_err());
+    }
+
+    #[test]
+    fn test_boundary_max_cpu() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 4000,
+            free_memory: 4000,
+            cpu_usage: 100.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_ok());
+    }
+
+    #[test]
+    fn test_boundary_min_cpu() {
+        let state = SystemState {
+            timestamp: Local::now().to_rfc3339(),
+            total_memory: 8000,
+            used_memory: 4000,
+            free_memory: 4000,
+            cpu_usage: 0.0,
+            disk_free: 100000,
+        };
+        assert!(validate_system_state(&state).is_ok());
+    }
 }
